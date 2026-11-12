@@ -27,8 +27,8 @@ jobs:
 
       - name: Build Docker image
         run: docker build -t academy-preview-api:ci .
-  verify-aws-identity:
-    name: Verify AWS identity
+  publish-to-ecr:
+    name: Publish image to ECR
     needs: test-and-build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -38,6 +38,9 @@ jobs:
       contents: read
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Configure AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
@@ -46,3 +49,23 @@ jobs:
 
       - name: Verify assumed identity
         run: aws sts get-caller-identity
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: academy-preview-api
+          IMAGE_TAG: sha-${{ github.sha }}
+        run: |
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+          docker build --pull \
+            --build-arg BUILD_REVISION="$GITHUB_SHA" \
+            -t "$IMAGE_URI" .
+
+          docker push "$IMAGE_URI"
+
+          echo "Published image: $IMAGE_URI"
