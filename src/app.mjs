@@ -51,7 +51,6 @@ const renderPage = ({ version, revision, environment, hostname, ready }) => `<!d
   <footer><a href="/api/info">/api/info</a> · <a href="/health/live">/health/live</a> · <a href="/health/ready">/health/ready</a></footer>
 </main></body></html>`;
 
-/** Create an HTTP server without starting it, so tests can use an ephemeral port. */
 export function createAppServer({
   version = process.env.APP_VERSION || '0.1.0',
   revision = process.env.BUILD_REVISION || 'local',
