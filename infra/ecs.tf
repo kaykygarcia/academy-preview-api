@@ -97,4 +97,14 @@ resource "aws_ecs_service" "api" {
     aws_iam_role_policy_attachment.ecs_execution,
     aws_route_table_association.public
   ]
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
+
 }
