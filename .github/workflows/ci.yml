@@ -29,7 +29,7 @@ jobs:
         run: docker build -t academy-preview-api:ci .
   publish-to-ecr:
     name: Publish image to ECR
-    needs: test-and-build
+    needs: [test-and-build, terraform-validate]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
@@ -69,3 +69,28 @@ jobs:
           docker push "$IMAGE_URI"
 
           echo "Published image: $IMAGE_URI"
+  terraform-validate:
+    name: Validate Terraform
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: infra
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.17.2'
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check
+
+      - name: Initialize Terraform
+        run: terraform init -backend=false -input=false
+
+      - name: Validate Terraform configuration
+        run: terraform validate
