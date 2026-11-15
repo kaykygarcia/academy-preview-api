@@ -40,7 +40,7 @@ const renderPage = ({ version, revision, environment, hostname, ready }) => `<!d
 </head>
 <body><main>
   <div class="top"><span class="brand">Kayky Academy / Release Preview</span><span class="pill">${ready ? '● Ready' : '● Not Ready'}</span></div>
-  <h1>Deploy automático.<br>Direto do GitHub para a AWS.</h1>
+  <h1>Deploy automático.<br>Direto do GitHub para a AWS. Testando uma atualização.</h1>
   <p>Este ambiente identifica a versão que está atendendo às requisições. Depois, a pipeline vai criá-lo para um Pull Request e removê-lo quando não for mais necessário.</p>
   <dl>
     <div><dt>Versão</dt><dd>${safeHtml(version)}</dd></div>
