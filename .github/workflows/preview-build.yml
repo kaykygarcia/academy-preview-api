@@ -1,0 +1,53 @@
+name: Preview Build
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  build-preview:
+    name: Build PR preview image
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build and export preview image
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          IMAGE="academy-preview-api:pr-${PR_NUMBER}"
+
+          docker build --pull \
+            --build-arg BUILD_REVISION="$PR_SHA" \
+            -t "$IMAGE" .
+
+          docker save "$IMAGE" | gzip > preview-image.tar.gz
+
+      - name: Upload preview artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-image-pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          path: preview-image.tar.gz
+          if-no-files-found: error
+          retention-days: 1
