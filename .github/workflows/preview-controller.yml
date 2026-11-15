@@ -35,6 +35,11 @@ jobs:
 
   resolve-artifact:
     name: Resolve PR preview artifact
+    outputs:
+      ready: ${{ steps.verify.outputs.ready }}
+      pr: ${{ steps.verify.outputs.pr }}
+      sha: ${{ steps.verify.outputs.sha }}
+      artifact_id: ${{ steps.verify.outputs.artifact_id }}
     if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
 
@@ -44,6 +49,7 @@ jobs:
 
     steps:
       - name: Locate and verify preview artifact
+        id: verify
         uses: actions/github-script@v8
         with:
           script: |
@@ -104,4 +110,84 @@ jobs:
             core.info(`Commit: ${sha}`);
             core.info(`Artifact: ${artifact.name}`);
             core.info(`Artifact ID: ${artifact.id}`);
+            core.setOutput('ready', 'true');
+            core.setOutput('pr', String(prNumber));
+            core.setOutput('sha', sha);
+            core.setOutput('artifact_id', String(artifact.id));
+
             core.info('READY for next publication stage');
+
+  publish-preview-image:
+    name: Publish PR image to ECR
+    needs: resolve-artifact
+    if: needs.resolve-artifact.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+
+    permissions:
+      actions: read
+      id-token: write
+
+    steps:
+      - name: Download verified artifact
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.resolve-artifact.outputs.artifact_id }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/preview
+
+      - name: Validate and load Docker image
+        env:
+          PR_NUMBER: ${{ needs.resolve-artifact.outputs.pr }}
+        run: |
+          set -euo pipefail
+
+          ARCHIVE="$RUNNER_TEMP/preview/preview-image.tar.gz"
+
+          test -f "$ARCHIVE"
+          gzip -t "$ARCHIVE"
+
+          gzip -dc "$ARCHIVE" | docker load
+
+          docker image inspect \
+            "academy-preview-api:pr-${PR_NUMBER}" > /dev/null
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::181975986962:role/AcademyEcrPublisherRole
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Publish image
+        env:
+          PR_NUMBER: ${{ needs.resolve-artifact.outputs.pr }}
+          PR_SHA: ${{ needs.resolve-artifact.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          REPOSITORY="academy-preview-api"
+          REGISTRY="181975986962.dkr.ecr.us-east-1.amazonaws.com"
+          TAG="pr-${PR_NUMBER}-${PR_SHA}"
+          IMAGE_URI="${REGISTRY}/${REPOSITORY}:${TAG}"
+
+          EXISTING=$(aws ecr batch-get-image \
+            --repository-name "$REPOSITORY" \
+            --image-ids "imageTag=${TAG}" \
+            --query 'images[0].imageId.imageDigest' \
+            --output text)
+
+          if [ "$EXISTING" != "None" ]; then
+            echo "Image already published: $IMAGE_URI"
+            exit 0
+          fi
+
+          docker tag \
+            "academy-preview-api:pr-${PR_NUMBER}" \
+            "$IMAGE_URI"
+
+          docker push "$IMAGE_URI"
+
+          echo "Published: $IMAGE_URI"
