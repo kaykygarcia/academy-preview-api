@@ -1,0 +1,47 @@
+
+name: Preview Controller
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, closed]
+
+permissions: {}
+
+jobs:
+  inspect:
+    name: Inspect preview infrastructure
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+
+    concurrency:
+      group: preview-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Authenticate to AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::181975986962:role/AcademyPreviewControllerRole
+          aws-region: us-east-1
+
+      - name: Inspect event and ECS cluster
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_ACTION: ${{ github.event.action }}
+        run: |
+          set -euo pipefail
+
+          echo "PR: $PR_NUMBER"
+          echo "Action: $PR_ACTION"
+
+          aws sts get-caller-identity \
+            --query Arn --output text
+
+          aws ecs describe-clusters \
+            --clusters academy-preview-cluster \
+            --query '{Clusters:clusters[].{Name:clusterName,Status:status},Failures:failures}' \
+            --output json
