@@ -142,10 +142,25 @@ jobs:
         run: |
           set -euo pipefail
 
-          ARCHIVE="$RUNNER_TEMP/preview/preview-image.tar.gz"
+          echo "Arquivos baixados:"
+find "$RUNNER_TEMP/preview" -maxdepth 3 -type f -print
 
-          test -f "$ARCHIVE"
-          gzip -t "$ARCHIVE"
+mapfile -d '' ARCHIVES < <(
+  find "$RUNNER_TEMP/preview" \
+    -type f \
+    -name 'preview-image.tar.gz' \
+    -print0
+)
+
+if [ "${#ARCHIVES[@]}" -ne 1 ]; then
+  echo "Esperado 1 arquivo; encontrados: ${#ARCHIVES[@]}" >&2
+  exit 1
+fi
+
+ARCHIVE="${ARCHIVES[0]}"
+
+echo "Arquivo encontrado: $ARCHIVE"
+gzip -t "$ARCHIVE"
 
           gzip -dc "$ARCHIVE" | docker load
 
