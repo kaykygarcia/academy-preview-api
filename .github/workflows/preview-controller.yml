@@ -1,3 +1,36 @@
+
+name: Preview Controller
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [closed]
+  workflow_run:
+    workflows: [Preview Build]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  inspect-close:
+    name: Inspect PR closure
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Authenticate to AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::181975986962:role/AcademyPreviewControllerRole
+          aws-region: us-east-1
+
+      - name: Inspect closure
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
           echo "Would DELETE preview for PR #$PR_NUMBER"
           aws sts get-caller-identity --query Arn --output text
 
@@ -158,3 +191,17 @@
             --repository-name "$REPOSITORY" \
             --image-ids "imageTag=${TAG}" \
             --query 'images[0].imageId.imageDigest' \
+            --output text)
+
+          if [ "$EXISTING" != "None" ]; then
+            echo "Image already published: $IMAGE_URI"
+            exit 0
+          fi
+
+          docker tag \
+            "academy-preview-api:pr-${PR_NUMBER}" \
+            "$IMAGE_URI"
+
+          docker push "$IMAGE_URI"
+
+          echo "Published: $IMAGE_URI"
