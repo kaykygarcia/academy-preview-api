@@ -1,63 +1,107 @@
-
 name: Preview Controller
 
 on:
   pull_request_target:
     branches: [main]
-    types: [opened, synchronize, reopened, closed]
+    types: [closed]
+  workflow_run:
+    workflows: [Preview Build]
+    types: [completed]
 
 permissions: {}
 
 jobs:
-  inspect:
-    name: Inspect preview infrastructure
-    if: github.event.pull_request.head.repo.full_name == github.repository
+  inspect-close:
+    name: Inspect PR closure
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
 
     permissions:
       id-token: write
 
-    concurrency:
-      group: preview-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-
     steps:
-      - name: Inspect OIDC claims
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const token = await core.getIDToken('sts.amazonaws.com');
-            const payload = JSON.parse(
-              Buffer.from(token.split('.')[1], 'base64url').toString('utf8')
-            );
-
-            core.info(JSON.stringify({
-              sub: payload.sub,
-              aud: payload.aud,
-              event_name: payload.event_name,
-              ref: payload.ref,
-              workflow_ref: payload.workflow_ref
-            }, null, 2));
       - name: Authenticate to AWS via OIDC
         uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
           role-to-assume: arn:aws:iam::181975986962:role/AcademyPreviewControllerRole
           aws-region: us-east-1
 
-      - name: Inspect event and ECS cluster
+      - name: Inspect closure
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_ACTION: ${{ github.event.action }}
         run: |
-          set -euo pipefail
+          echo "Would DELETE preview for PR #$PR_NUMBER"
+          aws sts get-caller-identity --query Arn --output text
 
-          echo "PR: $PR_NUMBER"
-          echo "Action: $PR_ACTION"
+  resolve-artifact:
+    name: Resolve PR preview artifact
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
 
-          aws sts get-caller-identity \
-            --query Arn --output text
+    permissions:
+      actions: read
+      pull-requests: read
 
-          aws ecs describe-clusters \
-            --clusters academy-preview-cluster \
-            --query '{Clusters:clusters[].{Name:clusterName,Status:status},Failures:failures}' \
-            --output json
+    steps:
+      - name: Locate and verify preview artifact
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const run = context.payload.workflow_run;
+
+            if (run.head_repository?.full_name !== `${owner}/${repo}`) {
+              core.info('Build from another repository. Skipping.');
+              return;
+            }
+
+            const { data } = await github.rest.actions.listWorkflowRunArtifacts({
+              owner,
+              repo,
+              run_id: run.id,
+              per_page: 100
+            });
+
+            const matches = data.artifacts
+              .map(artifact => ({
+                artifact,
+                match: /^preview-image-pr-(\d+)-([a-f0-9]{40})$/.exec(artifact.name)
+              }))
+              .filter(item => item.match && !item.artifact.expired);
+
+            if (matches.length !== 1) {
+              core.setFailed('Expected exactly one valid preview artifact.');
+              return;
+            }
+
+            const { artifact, match } = matches[0];
+            const prNumber = Number(match[1]);
+            const sha = match[2];
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: prNumber
+            });
+
+            if (pr.head.repo?.full_name !== `${owner}/${repo}` ||
+                pr.base.ref !== 'main') {
+              core.setFailed('Unexpected PR repository or base branch.');
+              return;
+            }
+
+            if (pr.state !== 'open') {
+              core.info('PR already closed. Skipping preview.');
+              return;
+            }
+
+            if (pr.head.sha !== sha) {
+              core.info('Artifact belongs to an outdated commit. Skipping.');
+              return;
+            }
+
+            core.info(`PR #${prNumber} verified`);
+            core.info(`Commit: ${sha}`);
+            core.info(`Artifact: ${artifact.name}`);
+            core.info(`Artifact ID: ${artifact.id}`);
+            core.info('READY for next publication stage');
