@@ -22,7 +22,7 @@ jobs:
       cancel-in-progress: false
 
     steps:
-       - name: Inspect OIDC claims
+      - name: Inspect OIDC claims
         uses: actions/github-script@v8
         with:
           script: |
