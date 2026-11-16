@@ -1,4 +1,4 @@
-]import http from 'node:http';
+import http from 'node:http';
 import os from 'node:os';
 
 const safeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => ({
