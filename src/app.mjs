@@ -52,7 +52,7 @@ const renderPage = ({ version, revision, environment, hostname, ready }) => `<!d
 </main></body></html>`;
 
 export function createAppServer({
-  version = process.env.APP_VERSION || '0.1.0',
+  version = process.env.APP_VERSION || '0.1.1',
   revision = process.env.BUILD_REVISION || 'local',
   environment = process.env.APP_ENV || 'local',
   readiness = process.env.APP_READY || 'true',
