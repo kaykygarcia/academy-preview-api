@@ -1,4 +1,4 @@
-import http from 'node:http';
+]import http from 'node:http';
 import os from 'node:os';
 
 const safeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => ({
@@ -18,7 +18,7 @@ const renderPage = ({ version, revision, environment, hostname, ready }) => `<!d
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Academy Preview — ${safeHtml(version)}</title>
+  <title>Academy Preview 2 — ${safeHtml(version)}</title>
   <style>
     :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
     * { box-sizing: border-box; }
