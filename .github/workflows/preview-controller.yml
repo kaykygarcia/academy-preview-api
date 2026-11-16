@@ -451,8 +451,30 @@ jobs:
             --query 'tasks[0]' --output json)
 
           HEALTH=$(jq -r '.healthStatus' <<< "$TASK")
+
+          for attempt in $(seq 1 18); do
+            if [ "$HEALTH" = "HEALTHY" ]; then
+              echo "Task is healthy."
+              break
+            fi
+
+            if [ "$HEALTH" = "UNHEALTHY" ]; then
+              echo "Task is unhealthy." >&2
+              exit 1
+            fi
+
+            echo "Waiting for health check ($attempt/18): $HEALTH"
+            sleep 5
+
+            TASK=$(aws ecs describe-tasks \
+              --cluster "$ECS_CLUSTER" --tasks "$TASK_ARN" \
+              --query 'tasks[0]' --output json)
+
+            HEALTH=$(jq -r '.healthStatus' <<< "$TASK")
+          done
+
           if [ "$HEALTH" != "HEALTHY" ]; then
-            echo "Task is not healthy: $HEALTH" >&2
+            echo "Health check timed out: $HEALTH" >&2
             exit 1
           fi
 
