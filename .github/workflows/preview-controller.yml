@@ -19,6 +19,7 @@ jobs:
 
     permissions:
       id-token: write
+      deployments: write
 
     steps:
       - name: Authenticate to AWS via OIDC
@@ -68,6 +69,28 @@ jobs:
           else
             echo "Service already absent or inactive: $STATUS"
           fi
+
+      - name: Mark GitHub preview deployments inactive
+        uses: actions/github-script@v8
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const environment = `preview-pr-${process.env.PR_NUMBER}`;
+            const deployments = await github.paginate(
+              github.rest.repos.listDeployments,
+              {owner, repo, environment, per_page: 100}
+            );
+
+            for (const deployment of deployments) {
+              await github.rest.repos.createDeploymentStatus({
+                owner, repo,
+                deployment_id: deployment.id,
+                state: 'inactive',
+                description: 'PR closed; preview removed'
+              });
+            }
 
   resolve-artifact:
     name: Resolve PR preview artifact
@@ -253,6 +276,7 @@ jobs:
     permissions:
       id-token: write
       pull-requests: read
+      deployments: write
 
     env:
       PR_NUMBER: ${{ needs.resolve-artifact.outputs.pr }}
@@ -292,6 +316,7 @@ jobs:
           aws-region: us-east-1
 
       - name: Create or update ECS preview
+        id: ecs_deploy
         if: steps.current.outputs.ok == 'true'
         shell: bash
         run: |
@@ -347,6 +372,7 @@ jobs:
 
               aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$SERVICE"
               echo "Preview ready: $SERVICE"
+              echo "ready=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
           fi
@@ -398,3 +424,98 @@ jobs:
 
           echo "Preview deployed: $SERVICE"
           echo "Image: $IMAGE"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Discover preview URL
+        id: preview_url
+        if: steps.ecs_deploy.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SERVICE="academy-preview-pr-${PR_NUMBER}"
+
+          TASK_ARN=$(aws ecs list-tasks \
+            --cluster "$ECS_CLUSTER" \
+            --service-name "$SERVICE" \
+            --desired-status RUNNING \
+            --query 'taskArns[0]' --output text)
+
+          if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
+            echo "No running task found" >&2
+            exit 1
+          fi
+
+          TASK=$(aws ecs describe-tasks \
+            --cluster "$ECS_CLUSTER" --tasks "$TASK_ARN" \
+            --query 'tasks[0]' --output json)
+
+          HEALTH=$(jq -r '.healthStatus' <<< "$TASK")
+          if [ "$HEALTH" != "HEALTHY" ]; then
+            echo "Task is not healthy: $HEALTH" >&2
+            exit 1
+          fi
+
+          ENI_ID=$(jq -r '
+            [.attachments[].details[] |
+             select(.name == "networkInterfaceId") |
+             .value][0] // empty' <<< "$TASK")
+
+          test -n "$ENI_ID"
+
+          IP=$(aws ec2 describe-network-interfaces \
+            --network-interface-ids "$ENI_ID" \
+            --query 'NetworkInterfaces[0].Association.PublicIp' \
+            --output text)
+
+          test -n "$IP"
+          test "$IP" != "None"
+
+          URL="http://${IP}:3000"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Preview URL: $URL"
+
+      - name: Publish GitHub deployment
+        if: steps.preview_url.outputs.url != ''
+        uses: actions/github-script@v8
+        env:
+          PR_NUMBER: ${{ needs.resolve-artifact.outputs.pr }}
+          PR_SHA: ${{ needs.resolve-artifact.outputs.sha }}
+          PREVIEW_URL: ${{ steps.preview_url.outputs.url }}
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const environment = `preview-pr-${process.env.PR_NUMBER}`;
+
+            const {data: pr} = await github.rest.pulls.get({
+              owner, repo,
+              pull_number: Number(process.env.PR_NUMBER)
+            });
+
+            if (pr.state !== 'open' ||
+                pr.head.sha !== process.env.PR_SHA) {
+              core.info('PR closed or changed; skipping deployment record');
+              return;
+            }
+
+            const {data: deployment} =
+              await github.rest.repos.createDeployment({
+                owner, repo,
+                ref: process.env.PR_SHA,
+                environment,
+                auto_merge: false,
+                required_contexts: [],
+                transient_environment: true,
+                production_environment: false,
+                description: `Preview for PR #${process.env.PR_NUMBER}`
+              });
+
+            await github.rest.repos.createDeploymentStatus({
+              owner, repo,
+              deployment_id: deployment.id,
+              state: 'success',
+              environment_url: process.env.PREVIEW_URL,
+              description: 'ECS preview healthy'
+            });
+
+            core.info(`GitHub deployment ready: ${process.env.PREVIEW_URL}`);
