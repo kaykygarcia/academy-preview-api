@@ -12,8 +12,8 @@ on:
 permissions: {}
 
 jobs:
-  inspect-close:
-    name: Inspect PR closure
+  delete-preview:
+    name: Delete PR preview
     if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
 
@@ -27,12 +27,47 @@ jobs:
           role-to-assume: arn:aws:iam::181975986962:role/AcademyPreviewControllerRole
           aws-region: us-east-1
 
-      - name: Inspect closure
+      - name: Delete preview service
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          ECS_CLUSTER: academy-preview-cluster
+        shell: bash
         run: |
-          echo "Would DELETE preview for PR #$PR_NUMBER"
-          aws sts get-caller-identity --query Arn --output text
+          set -euo pipefail
+
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || exit 1
+
+          SERVICE="academy-preview-pr-${PR_NUMBER}"
+          echo "Cleaning up $SERVICE"
+
+          if ! aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$SERVICE" \
+            --output json > service.json 2> error.log; then
+
+            if grep -q 'ClusterNotFoundException' error.log; then
+              echo "Cluster already removed. Nothing to delete."
+              exit 0
+            fi
+
+            cat error.log >&2
+            exit 1
+          fi
+
+          STATUS=$(jq -r '.services[0].status // "MISSING"' service.json)
+
+          if [ "$STATUS" = "ACTIVE" ]; then
+            aws ecs delete-service \
+              --cluster "$ECS_CLUSTER" \
+              --service "$SERVICE" \
+              --force \
+              --query 'service.{Name:serviceName,Status:status,Desired:desiredCount}' \
+              --output json
+
+            echo "Deletion requested for $SERVICE"
+          else
+            echo "Service already absent or inactive: $STATUS"
+          fi
 
   resolve-artifact:
     name: Resolve PR preview artifact
@@ -143,7 +178,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Arquivos baixados:"
+          echo "Downloaded files:"
           find "$RUNNER_TEMP/preview" -maxdepth 3 -type f -print
 
           mapfile -d '' ARCHIVES < <(
@@ -154,12 +189,11 @@ jobs:
           )
 
           if [ "${#ARCHIVES[@]}" -ne 1 ]; then
-            echo "Esperado 1 arquivo; encontrados: ${#ARCHIVES[@]}" >&2
+            echo "Expected one image archive." >&2
             exit 1
           fi
 
           ARCHIVE="${ARCHIVES[0]}"
-          echo "Arquivo encontrado: $ARCHIVE"
           gzip -t "$ARCHIVE"
           gzip -dc "$ARCHIVE" | docker load
 
